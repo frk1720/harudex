@@ -1,0 +1,15 @@
+{
+  "name": "drivefilm",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Situs streaming film (drive) yang dijalankan di Cloudflare Workers",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "login": "wrangler login",
+    "whoami": "wrangler whoami"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}
