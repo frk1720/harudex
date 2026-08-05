@@ -78,6 +78,23 @@ export default {
 			return Response.redirect(new URL(`/folder/${code}`, request.url).toString(), 308);
 		}
 
+		// Direct download link: /file/<code>/<name> — hides the Google Drive file ID.
+		// The short code maps to the file in D1 and the worker streams the file, so the
+		// ID never appears in the URL.
+		if (url.pathname.startsWith('/file/')) {
+			const parts = url.pathname.split('/').filter(Boolean);
+			const code = parts[1];
+			if (!code) return new Response('Missing code', { status: 400 });
+			try {
+				const row = await env.DB.prepare('SELECT file_id FROM file_links WHERE code = ?').bind(code).first<{ file_id: string }>();
+				if (!row) return new Response('Link not found', { status: 404 });
+				const accessToken = await getAccessToken(env);
+				return await streamFile(request, row.file_id, accessToken, true);
+			} catch (err: any) {
+				return new Response(err.message, { status: 500 });
+			}
+		}
+
 		// Handle API routes
 		if (url.pathname.startsWith('/api/')) {
 			// Simple Login Endpoint
@@ -236,6 +253,30 @@ export default {
 						success: true,
 						code,
 						url: `${new URL(request.url).origin}/folder/${code}`,
+					});
+				} catch (err: any) {
+					return Response.json({ success: false, message: err.message }, { status: 500 });
+				}
+			}
+
+			// Endpoint to create a short download link for a file:
+			//   /api/filelink?id=<fileId>&name=<name> -> /file/<code>/<name>
+			if (url.pathname === '/api/filelink' && request.method === 'GET') {
+				const authHeader = request.headers.get('Authorization');
+				if (authHeader !== `Bearer ${todayToken()}`) {
+					return Response.json({ success: false, message: 'Unauthorized or token expired' }, { status: 401 });
+				}
+
+				const fileId = url.searchParams.get('id');
+				const name = url.searchParams.get('name') || 'file';
+				if (!fileId) return Response.json({ success: false, message: 'Missing file id' }, { status: 400 });
+
+				try {
+					const code = await ensureFileLink(env.DB, fileId, name);
+					return Response.json({
+						success: true,
+						code,
+						url: `${new URL(request.url).origin}/file/${code}/${encodeURIComponent(name)}`,
 					});
 				} catch (err: any) {
 					return Response.json({ success: false, message: err.message }, { status: 500 });
@@ -453,6 +494,28 @@ async function ensureShortlinks(db: D1Database, folders: { id: string; name: str
 	}
 
 	return result;
+}
+
+// Returns the short code for a file download link, creating one if it doesn't exist yet.
+// The file ID is never exposed in the shared URL.
+async function ensureFileLink(db: D1Database, fileId: string, name: string): Promise<string> {
+	const existing = await db.prepare('SELECT code FROM file_links WHERE file_id = ?').bind(fileId).first<{ code: string }>();
+	if (existing) return existing.code;
+
+	// Try a few times in case of a code collision
+	for (let i = 0; i < 5; i++) {
+		const code = generateCode();
+		const res = await db
+			.prepare('INSERT OR IGNORE INTO file_links (code, file_id, name) VALUES (?, ?, ?)')
+			.bind(code, fileId, name || '')
+			.run();
+		if (res.meta.changes > 0) return code;
+	}
+
+	// Fall back to whatever is stored now
+	const again = await db.prepare('SELECT code FROM file_links WHERE file_id = ?').bind(fileId).first<{ code: string }>();
+	if (again) return again.code;
+	throw new Error('Failed to create file link');
 }
 
 // Streams a Google Drive file through the worker, preserving Range

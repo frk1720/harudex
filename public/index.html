@@ -732,6 +732,19 @@
     }
 
     let currentStream = null; // { name, streamUrl }
+    // Build a hidden-ID download link for a file (e.g. /file/<code>/<name>).
+    // Falls back to the plain link if the API call fails.
+    async function fileDownloadUrl(f) {
+      try {
+        const headers = {};
+        if (currentToken) headers['Authorization'] = `Bearer ${currentToken}`;
+        const res = await fetch(`/api/filelink?id=${encodeURIComponent(f.id)}&name=${encodeURIComponent(f.name)}`, { headers });
+        const data = await res.json();
+        if (data.success && data.url) return data.url;
+      } catch (err) {}
+      return `${window.location.origin}/api/file?id=${encodeURIComponent(f.id)}&download=1`;
+    }
+
     function openStreamModal(f) {
       // Put the filename in the path so external players (PotPlayer/VLC/MX) use it as the title.
       const streamUrl = `${window.location.origin}/api/file/${encodeURIComponent(f.name)}?id=${f.id}`;
@@ -895,15 +908,16 @@
           dlBtn.className = 'act-btn';
           dlBtn.title = 'Download';
           dlBtn.innerHTML = '⬇️';
-          dlBtn.onclick = () => window.open(downloadUrl, '_blank');
+          dlBtn.onclick = async () => window.open(await fileDownloadUrl(f), '_blank');
           
           // Copy Btn — copies the DOWNLOAD link, so pasting saves the file
           const cpBtn = document.createElement('button');
           cpBtn.className = 'act-btn';
           cpBtn.title = 'Copy Download Link';
           cpBtn.innerHTML = '🔗';
-          cpBtn.onclick = () => {
-            navigator.clipboard.writeText(downloadUrl);
+          cpBtn.onclick = async () => {
+            const link = await fileDownloadUrl(f);
+            navigator.clipboard.writeText(link);
             cpBtn.innerHTML = '✅';
             setTimeout(() => cpBtn.innerHTML = '🔗', 2000);
           };
@@ -997,16 +1011,16 @@
     });
 
     // Bulk Copy
-    document.getElementById('bulk-copy-btn').addEventListener('click', () => {
+    document.getElementById('bulk-copy-btn').addEventListener('click', async () => {
       const selected = document.querySelectorAll('.row-checkbox:checked');
       if (selected.length === 0) return alert('No items selected');
       
       let links = [];
-      selected.forEach(chk => {
+      for (const chk of selected) {
         if (chk.dataset.isfolder !== "true") {
-          links.push(`${window.location.origin}/api/file?id=${chk.dataset.id}&download=1`);
+          links.push(await fileDownloadUrl({ id: chk.dataset.id, name: chk.dataset.name }));
         }
-      });
+      }
 
       if (links.length > 0) {
         navigator.clipboard.writeText(links.join('\n'));
@@ -1053,7 +1067,7 @@
           count++;
           // Stagger downloads to prevent browser blocking
           setTimeout(() => {
-            window.open(`/api/file?id=${chk.dataset.id}&download=1`, '_blank');
+            fileDownloadUrl({ id: chk.dataset.id, name: chk.dataset.name }).then((u) => window.open(u, '_blank'));
           }, count * 500);
         }
       });
