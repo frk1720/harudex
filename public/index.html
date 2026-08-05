@@ -745,9 +745,23 @@
       return `${window.location.origin}/api/file?id=${encodeURIComponent(f.id)}&download=1`;
     }
 
-    function openStreamModal(f) {
-      // Put the filename in the path so external players (PotPlayer/VLC/MX) use it as the title.
-      const streamUrl = `${window.location.origin}/api/file/${encodeURIComponent(f.name)}?id=${f.id}`;
+    // Build a hidden-ID stream URL (e.g. /stream/<code>/<name>).
+    // Falls back to the plain link if the API call fails.
+    async function streamFileUrl(f) {
+      try {
+        const headers = {};
+        if (currentToken) headers['Authorization'] = `Bearer ${currentToken}`;
+        const res = await fetch(`/api/filelink?id=${encodeURIComponent(f.id)}&name=${encodeURIComponent(f.name)}`, { headers });
+        const data = await res.json();
+        if (data.success && data.code) return `${window.location.origin}/stream/${data.code}/${encodeURIComponent(f.name)}`;
+      } catch (err) {}
+      return `${window.location.origin}/api/file/${encodeURIComponent(f.name)}?id=${encodeURIComponent(f.id)}`;
+    }
+
+    async function openStreamModal(f) {
+      // Hidden-ID URL keeps the Google Drive file ID out of the stream link;
+      // the filename stays in the path so external players (PotPlayer/VLC/MX) use it as the title.
+      const streamUrl = await streamFileUrl(f);
       currentStream = { name: f.name, streamUrl };
       document.getElementById('stream-modal-title').textContent = f.name;
       document.getElementById('stream-modal-file').textContent = streamUrl;

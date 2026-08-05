@@ -79,17 +79,15 @@ export default {
 		}
 
 		// Direct download link: /file/<code>/<name> — hides the Google Drive file ID.
+		// Stream link: /stream/<code>/<name> — same, but streams inline for players.
 		// The short code maps to the file in D1 and the worker streams the file, so the
 		// ID never appears in the URL.
-		if (url.pathname.startsWith('/file/')) {
+		if (url.pathname.startsWith('/file/') || url.pathname.startsWith('/stream/')) {
 			const parts = url.pathname.split('/').filter(Boolean);
 			const code = parts[1];
 			if (!code) return new Response('Missing code', { status: 400 });
 			try {
-				const row = await env.DB.prepare('SELECT file_id FROM file_links WHERE code = ?').bind(code).first<{ file_id: string }>();
-				if (!row) return new Response('Link not found', { status: 404 });
-				const accessToken = await getAccessToken(env);
-				return await streamFile(request, row.file_id, accessToken, true);
+				return await serveFileLink(request, env, code, url.pathname.startsWith('/file/'));
 			} catch (err: any) {
 				return new Response(err.message, { status: 500 });
 			}
@@ -516,6 +514,15 @@ async function ensureFileLink(db: D1Database, fileId: string, name: string): Pro
 	const again = await db.prepare('SELECT code FROM file_links WHERE file_id = ?').bind(fileId).first<{ code: string }>();
 	if (again) return again.code;
 	throw new Error('Failed to create file link');
+}
+
+// Serves the file mapped to a short code without exposing the Drive ID.
+// asDownload=true forces an attachment (used by /file/); false streams inline (used by /stream/).
+async function serveFileLink(request: Request, env: Env, code: string, asDownload: boolean): Promise<Response> {
+	const row = await env.DB.prepare('SELECT file_id FROM file_links WHERE code = ?').bind(code).first<{ file_id: string }>();
+	if (!row) return new Response('Link not found', { status: 404 });
+	const accessToken = await getAccessToken(env);
+	return await streamFile(request, row.file_id, accessToken, asDownload);
 }
 
 // Streams a Google Drive file through the worker, preserving Range

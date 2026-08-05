@@ -18,7 +18,7 @@
 		"not_found_handling": "single-page-application",
 		"binding": "ASSETS",
 		// Only /api/* and the legacy /s/ alias need the Worker; everything else is asset-served
-		"run_worker_first": ["/api/*", "/s/*", "/file/*"]
+		"run_worker_first": ["/api/*", "/s/*", "/file/*", "/stream/*"]
 	},
 	"observability": {
 		"enabled": true
