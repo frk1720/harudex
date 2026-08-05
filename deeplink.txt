@@ -1,0 +1,6 @@
+status: 200
+has potplayer://: true
+has vlc://: true
+has detectPlatform: true
+has intent:// (mx): true
+has stream-modal: true

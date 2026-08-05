@@ -708,13 +708,27 @@
     // Build deep-link URLs for external players
     function playerUrl(f, streamUrl) {
       const name = encodeURIComponent(f.name);
+      const title = (f.name || 'Video').replace(/"/g, '');
       const u = new URL(streamUrl);
       // MX Player: intent scheme so the Android app can open the stream
       const mx = `intent://${u.host}${u.pathname}${u.search}#Intent;scheme=${u.protocol.replace(':', '')};package=com.mxtech.videoplayer.ad;S.title=${name};type=video/*;end`;
-      // VLC / PotPlayer accept direct stream links
-      const vlc = streamUrl;
-      const pot = streamUrl;
+      // VLC: vlc:// scheme (Android/iOS/macOS)
+      const vlc = `vlc://${streamUrl}`;
+      // PotPlayer: potplayer:// protocol, registered by PotPlayer on Windows.
+      // Format: potplayer://<stream_url>::"<window title>"
+      const pot = `potplayer://${streamUrl}::"${title}"`;
       return { mx, vlc, pot };
+    }
+
+    // Detect the user's OS so we only offer players that make sense
+    function detectPlatform() {
+      const ua = navigator.userAgent || '';
+      const uad = navigator.userAgentData;
+      const platform = (uad && uad.platform ? uad.platform : (navigator.platform || '')).toLowerCase();
+      if (/android/i.test(ua) || platform.includes('android')) return 'android';
+      if (/iphone|ipad|ipod/i.test(ua) || /mac|iphone|ipad/i.test(platform)) return 'apple';
+      if (/windows|win32|win64/i.test(ua) || platform.includes('win')) return 'windows';
+      return 'other';
     }
 
     let currentStream = null; // { name, streamUrl }
@@ -728,6 +742,14 @@
       document.getElementById('stream-mx-btn').href = links.mx;
       document.getElementById('stream-vlc-btn').href = links.vlc;
       document.getElementById('stream-pot-btn').href = links.pot;
+
+      // Show only the players that make sense on the user's device
+      const platform = detectPlatform();
+      document.getElementById('stream-mx-btn').style.display = platform === 'android' ? 'block' : 'none';
+      document.getElementById('stream-pot-btn').style.display = platform === 'windows' ? 'block' : 'none';
+      // VLC works on mobile + desktop; keep it visible everywhere
+      document.getElementById('stream-vlc-btn').style.display = 'block';
+
       document.getElementById('stream-modal').style.display = 'flex';
     }
     function closeStreamModal() {
