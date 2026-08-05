@@ -8,3 +8,8 @@ cookies.txt
 ocr.ps1
 ss3.png
 .dev.vars
+
+# Environment secrets — never commit
+.env
+.env.*
+!.env.example
