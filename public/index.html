@@ -407,6 +407,7 @@
         <div class="toolbar">
           <input type="text" class="search-box" id="search-box" placeholder="🔍 Search files in this folder..." />
           <div class="actions">
+            <button class="btn" id="copy-folder-link-btn" title="Copy short link for this folder">🔗 Folder Link</button>
             <button class="btn btn-copy" id="bulk-copy-btn">📄 Copy Link (<span id="sel-count-copy">0</span>)</button>
             <button class="btn btn-download" id="bulk-dl-btn">☁️ Download Selected (<span id="sel-count-dl">0</span>)</button>
           </div>
@@ -446,6 +447,15 @@
     let currentFolderId = 'root';
     let folderHistory = [{ id: 'root', name: 'Root' }];
     let currentFiles = [];
+    let currentShortUrl = null;
+
+    // Support shortlink deep links: /?folder=<driveFolderId>
+    const urlParams = new URLSearchParams(window.location.search);
+    const deepFolder = urlParams.get('folder');
+    if (deepFolder) {
+      currentFolderId = deepFolder;
+      folderHistory = [{ id: 'root', name: 'Root' }, { id: deepFolder, name: 'Shortlink' }];
+    }
 
     // Format bytes
     function formatBytes(bytes, decimals = 2) {
@@ -550,6 +560,11 @@
         const data = await res.json();
         if (data.success) {
           currentFiles = data.files;
+          currentShortUrl = data.currentShortUrl || null;
+          // Keep the address bar in sync with the current folder (deep-linkable)
+          const url = new URL(window.location.href);
+          url.searchParams.set('folder', folderId);
+          window.history.replaceState({}, '', url);
           renderFiles(currentFiles);
         } else {
           fileContainer.innerHTML = `<div style="padding: 20px; color: red;">Error: ${data.message}</div>`;
@@ -626,7 +641,35 @@
         // Actions
         const actCol = document.createElement('div');
         actCol.className = 'act-col';
-        if (!f.isFolder) {
+        if (f.isFolder) {
+          // Copy short link for this folder
+          const cpBtn = document.createElement('button');
+          cpBtn.className = 'act-btn';
+          cpBtn.title = 'Copy Folder Shortlink';
+          cpBtn.innerHTML = '🔗';
+          cpBtn.onclick = async () => {
+            try {
+              let link = f.shortUrl || null;
+              if (!link) {
+                const res = await fetch(`/api/shortlink?folder=${encodeURIComponent(f.id)}&name=${encodeURIComponent(f.name)}`, {
+                  headers: { 'Authorization': `Bearer ${currentToken}` }
+                });
+                const data = await res.json();
+                if (data.success) link = data.url;
+              }
+              if (link) {
+                navigator.clipboard.writeText(link);
+                cpBtn.innerHTML = '✅';
+                setTimeout(() => cpBtn.innerHTML = '🔗', 2000);
+              } else {
+                alert('Failed to create shortlink');
+              }
+            } catch (err) {
+              alert('Failed to create shortlink');
+            }
+          };
+          actCol.appendChild(cpBtn);
+        } else {
           // Download Btn
           const dlBtn = document.createElement('button');
           dlBtn.className = 'act-btn';
@@ -734,6 +777,29 @@
         setTimeout(() => btn.innerHTML = origText, 2000);
       } else {
         alert('No files selected (folders cannot be copied)');
+      }
+    });
+
+    // Copy short link for the current folder
+    document.getElementById('copy-folder-link-btn').addEventListener('click', async () => {
+      if (!currentShortUrl) {
+        // Lazily ask the backend for a shortlink for the current folder
+        try {
+          const res = await fetch(`/api/shortlink?folder=${encodeURIComponent(currentFolderId)}&name=${encodeURIComponent(folderHistory[folderHistory.length - 1]?.name || '')}`, {
+            headers: { 'Authorization': `Bearer ${currentToken}` }
+          });
+          const data = await res.json();
+          if (data.success) currentShortUrl = data.url;
+          else alert('Failed to create shortlink: ' + (data.message || 'unknown'));
+        } catch (err) {
+          alert('Failed to create shortlink');
+        }
+      }
+      if (currentShortUrl) {
+        navigator.clipboard.writeText(currentShortUrl);
+        const btn = document.getElementById('copy-folder-link-btn');
+        btn.textContent = '✅ Copied!';
+        setTimeout(() => btn.textContent = '🔗 Folder Link', 2000);
       }
     });
 

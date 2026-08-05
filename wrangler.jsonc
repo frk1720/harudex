@@ -35,5 +35,13 @@
 	// Local dev values live in .dev.vars (gitignored).
 	"vars": {
 		"GD_ROOT_FOLDER": "1E--UT42B0n1FJL8VbS6TOMMCQwqRkmTP"
-	}
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "harudex-db",
+			"database_id": "286aa062-bbd8-4c88-b518-bb9bc667f5a8",
+			"migrations_dir": "migrations"
+		}
+	]
 }
