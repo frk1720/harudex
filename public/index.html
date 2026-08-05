@@ -708,15 +708,15 @@
     // Build deep-link URLs for external players
     function playerUrl(f, streamUrl) {
       const name = encodeURIComponent(f.name);
-      const title = (f.name || 'Video').replace(/"/g, '');
       const u = new URL(streamUrl);
       // MX Player: intent scheme so the Android app can open the stream
       const mx = `intent://${u.host}${u.pathname}${u.search}#Intent;scheme=${u.protocol.replace(':', '')};package=com.mxtech.videoplayer.ad;S.title=${name};type=video/*;end`;
       // VLC: vlc:// scheme (Android/iOS/macOS)
       const vlc = `vlc://${streamUrl}`;
-      // PotPlayer: potplayer:// protocol, registered by PotPlayer on Windows.
-      // Format: potplayer://<stream_url>::"<window title>"
-      const pot = `potplayer://${streamUrl}::"${title}"`;
+      // PotPlayer: pass only the plain stream URL after potplayer:// —
+      // appending a ::"title" suffix breaks it (PotPlayer treats the whole
+      // string as the connection URL, so "Unable to connect" occurs).
+      const pot = `potplayer://${streamUrl}`;
       return { mx, vlc, pot };
     }
 
