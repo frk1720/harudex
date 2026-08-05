@@ -155,6 +155,70 @@ export default {
 				}
 			}
 
+			// Endpoint to search files globally in Google Drive
+			if (url.pathname === '/api/search' && request.method === 'GET') {
+				const authHeader = request.headers.get('Authorization');
+				if (authHeader !== `Bearer ${todayToken()}`) {
+					return Response.json({ success: false, message: 'Unauthorized or token expired' }, { status: 401 });
+				}
+
+				const query = url.searchParams.get('q');
+				if (!query) return Response.json({ success: false, message: 'Missing query string' }, { status: 400 });
+
+				try {
+					const accessToken = await getAccessToken(env);
+					const safeQuery = query.replace(/'/g, "\\'");
+					const gdQuery = `name contains '${safeQuery}' and trashed = false`;
+					const fields = 'nextPageToken,files(id, name, mimeType, size, modifiedTime)';
+					
+					const params = new URLSearchParams({
+						q: gdQuery,
+						fields,
+						orderBy: 'folder,name',
+						pageSize: '200', // Limit search results to 200 to keep it fast
+						spaces: 'drive',
+					});
+
+					const gdUrl = `https://www.googleapis.com/drive/v3/files?${params.toString()}`;
+					const gdResponse = await fetch(gdUrl, {
+						headers: { Authorization: `Bearer ${accessToken}` },
+					});
+
+					if (!gdResponse.ok) {
+						const text = await gdResponse.text();
+						throw new Error(`GD Error ${gdResponse.status}: ${text}`);
+					}
+
+					const data: any = await gdResponse.json();
+					const rawFiles = data.files || [];
+
+					const files = rawFiles.map((f: any) => ({
+						id: f.id,
+						name: f.name,
+						mimeType: f.mimeType,
+						size: f.size || '0',
+						modifiedTime: f.modifiedTime,
+						isFolder: f.mimeType === 'application/vnd.google-apps.folder',
+					}));
+
+					const codeByFolder = await ensureShortlinks(env.DB, files.filter((f: any) => f.isFolder));
+					const origin = new URL(request.url).origin;
+					const filesWithLinks = files.map((f: any) => {
+						if (f.isFolder && codeByFolder[f.id]) {
+							return { ...f, shortUrl: `${origin}/folder/${codeByFolder[f.id]}` };
+						}
+						return f;
+					});
+
+					return Response.json({
+						success: true,
+						files: filesWithLinks,
+					});
+				} catch (err: any) {
+					return Response.json({ success: false, message: err.message }, { status: 500 });
+				}
+			}
+
 			// Endpoint to create shortlink: /api/shortlink?folder=<id>&name=<name>
 			if (url.pathname === '/api/shortlink' && request.method === 'GET') {
 				const authHeader = request.headers.get('Authorization');
@@ -227,7 +291,9 @@ export default {
 				}
 			}
 
-			// Endpoint to download/proxy file
+			// Endpoint to download/proxy file.
+			//   /api/file?id=X            -> stream inline (media player can seek)
+			//   /api/file?id=X&download=1 -> force download (attachment)
 			if (url.pathname === '/api/file') {
 				// File access is PUBLIC (bypasses auth)
 				// Anyone with the file ID can access it directly.
@@ -235,9 +301,10 @@ export default {
 				const fileId = url.searchParams.get('id');
 				if (!fileId) return new Response('Missing id', { status: 400 });
 
+				const asDownload = url.searchParams.get('download') === '1';
 				try {
 					const accessToken = await getAccessToken(env);
-					return await streamFile(request, fileId, accessToken);
+					return await streamFile(request, fileId, accessToken, asDownload);
 				} catch (err: any) {
 					return new Response(err.message, { status: 500 });
 				}
@@ -390,7 +457,9 @@ async function ensureShortlinks(db: D1Database, folders: { id: string; name: str
 
 // Streams a Google Drive file through the worker, preserving Range
 // requests so video players can seek and stream efficiently.
-async function streamFile(request: Request, fileId: string, accessToken: string): Promise<Response> {
+// When asDownload is true, the response forces the browser to save
+// the file instead of playing it inline.
+async function streamFile(request: Request, fileId: string, accessToken: string, asDownload = false): Promise<Response> {
 	// Get file metadata first
 	const metaUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?fields=name,mimeType,size`;
 	const metaRes = await fetch(metaUrl, { headers: { Authorization: `Bearer ${accessToken}` } });
@@ -400,6 +469,8 @@ async function streamFile(request: Request, fileId: string, accessToken: string)
 	}
 
 	const meta: any = await metaRes.json();
+	const disposition = asDownload ? 'attachment' : 'inline';
+	const contentDisposition = `${disposition}; filename*=UTF-8''${encodeURIComponent(meta.name || 'file')}`;
 
 	// HEAD requests (used by video players to probe metadata) return no body.
 	if (request.method === 'HEAD') {
@@ -407,7 +478,7 @@ async function streamFile(request: Request, fileId: string, accessToken: string)
 		headers.set('Content-Type', meta.mimeType || 'application/octet-stream');
 		headers.set('Accept-Ranges', 'bytes');
 		if (meta.size) headers.set('Content-Length', String(meta.size));
-		headers.set('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(meta.name || 'file')}`);
+		headers.set('Content-Disposition', contentDisposition);
 		applyCors(headers);
 		return new Response(null, { status: 200, headers });
 	}
@@ -418,17 +489,18 @@ async function streamFile(request: Request, fileId: string, accessToken: string)
 		method: 'GET',
 		headers: {
 			Authorization: `Bearer ${accessToken}`,
-			Range: request.headers.get('Range') || '',
+			Range: asDownload ? '' : (request.headers.get('Range') || ''),
 		},
 	});
 
+	// Range is only useful for streaming; downloads get the whole file
 	if (!proxyRequest.headers.get('Range')) proxyRequest.headers.delete('Range');
 
 	let fileResponse = await fetch(proxyRequest);
 
 	// Reconstruct response to pass headers (Content-Type, Content-Disposition, etc)
 	const headers = new Headers(fileResponse.headers);
-	headers.set('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(meta.name || 'file')}`);
+	headers.set('Content-Disposition', contentDisposition);
 	if (meta.mimeType) headers.set('Content-Type', meta.mimeType);
 	// Allow byte-range requests so media players can seek
 	headers.set('Accept-Ranges', 'bytes');

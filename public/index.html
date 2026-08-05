@@ -389,7 +389,7 @@
     <!-- Main Explorer Screen (Hidden Initially) -->
     <div id="explorer-screen" style="display: none; flex-direction: column; min-height: 100vh;">
       <header>
-        <a href="#" class="logo">
+        <a href="#" class="logo" id="logo-home">
           <img src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRn1QJp02ztntarNkv7-7nuzyptP39WL9Ltk6biUkzMaGpoEC56i1QJ57AG&s=10" alt="icon" style="width: 32px; height: 32px; border-radius: 50%;">
           KillDrive
         </a>
@@ -405,7 +405,7 @@
         
         <!-- Toolbar -->
         <div class="toolbar">
-          <input type="text" class="search-box" id="search-box" placeholder="🔍 Search files in this folder..." />
+          <input type="text" class="search-box" id="search-box" placeholder="🔍 Search files in this drive..." />
           <div class="actions">
             <button class="btn" id="copy-folder-link-btn" title="Copy short link for this folder">🔗 Folder Link</button>
             <button class="btn btn-copy" id="bulk-copy-btn">📄 Copy Link (<span id="sel-count-copy">0</span>)</button>
@@ -431,6 +431,22 @@
             0 items
           </div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Streaming options modal -->
+  <div id="stream-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.8); z-index:3000; align-items:center; justify-content:center;">
+    <div style="background:rgba(0,0,0,0.85); border:1px solid var(--border-color); border-radius:14px; padding:24px; max-width:420px; width:90%;">
+      <h3 id="stream-modal-title" style="color:var(--haru-pink-light); margin:0 0 6px; word-break:break-word;">Stream</h3>
+      <p id="stream-modal-file" style="color:var(--text-muted); font-size:0.85rem; margin:0 0 16px; word-break:break-all;"></p>
+      <div style="display:flex; flex-direction:column; gap:10px;">
+        <a id="stream-browser-btn" href="#" target="_blank" style="display:block; text-align:center; padding:12px; background:var(--haru-pink-light); color:var(--haru-pink-dark); border-radius:8px; text-decoration:none; font-weight:700;">▶ Play in Browser</a>
+        <a id="stream-mx-btn" href="#" style="display:block; text-align:center; padding:12px; background:rgba(255,255,255,0.1); color:#fff; border-radius:8px; text-decoration:none;">🎬 MX Player</a>
+        <a id="stream-vlc-btn" href="#" style="display:block; text-align:center; padding:12px; background:rgba(255,255,255,0.1); color:#fff; border-radius:8px; text-decoration:none;">▶ VLC</a>
+        <a id="stream-pot-btn" href="#" style="display:block; text-align:center; padding:12px; background:rgba(255,255,255,0.1); color:#fff; border-radius:8px; text-decoration:none;">▶ PotPlayer</a>
+        <button id="stream-copy-btn" style="padding:12px; background:rgba(255,255,255,0.1); color:#fff; border:1px solid var(--border-color); border-radius:8px; cursor:pointer;">🔗 Copy Stream Link</button>
+        <button id="stream-close-btn" style="padding:10px; background:transparent; color:var(--text-muted); border:none; border-radius:8px; cursor:pointer;">✖ Close</button>
       </div>
     </div>
   </div>
@@ -543,6 +559,26 @@
       explorerScreen.style.display = 'none';
     });
 
+    // Home navigation — logo & house icon both go back to the root folder / main domain
+    function goHome() {
+      publicCode = null;
+      pendingDeepFolder = null;
+      currentFolderId = 'root';
+      folderHistory = [{ id: 'root', name: 'Root' }];
+      currentShortUrl = null;
+      window.history.replaceState({}, '', window.location.origin);
+      if (currentToken) {
+        showExplorer();
+      } else {
+        loginScreen.style.display = 'block';
+        explorerScreen.style.display = 'none';
+      }
+    }
+    document.getElementById('logo-home').addEventListener('click', (e) => {
+      e.preventDefault();
+      goHome();
+    });
+
     // Check auth on load — unless we're resolving a public shortlink first
     if (currentToken && !pathMatch) {
       showExplorer();
@@ -562,12 +598,41 @@
       }
     }
 
+    // Handle Logo click (Return to Root)
+    document.querySelector('.logo').addEventListener('click', (e) => {
+      e.preventDefault();
+      goHome();
+    });
+
     function renderBreadcrumb() {
-      breadcrumb.innerHTML = '<span>🏠</span>';
+      breadcrumb.innerHTML = '';
+      
+      // Always add Home icon as a separate button
+      const homeLink = document.createElement('a');
+      homeLink.href = '#';
+      homeLink.innerHTML = '🏠';
+      homeLink.title = 'Go to Root Directory';
+      homeLink.style.display = 'flex';
+      homeLink.style.alignItems = 'center';
+      homeLink.onclick = (e) => {
+        e.preventDefault();
+        goHome();
+      };
+      breadcrumb.appendChild(homeLink);
+
+      if (folderHistory.length > 0) {
+        const sep = document.createElement('span');
+        sep.textContent = ' / ';
+        sep.style.color = 'var(--text-muted)';
+        breadcrumb.appendChild(sep);
+      }
+
       folderHistory.forEach((item, index) => {
         const a = document.createElement('a');
         a.href = '#';
         a.textContent = item.name;
+        a.style.display = 'flex';
+        a.style.alignItems = 'center';
         a.onclick = (e) => {
           e.preventDefault();
           // slice history
@@ -590,6 +655,7 @@
       fileContainer.innerHTML = '<div class="loader"></div>';
       renderBreadcrumb();
       checkAll.checked = false;
+      document.getElementById('search-box').value = ''; // clear search when navigating
       updateSelection();
 
       try {
@@ -628,9 +694,68 @@
       }
     }
 
+    // ---------- Streaming helpers ----------
+
+    // Video-like file check (based on mime type or extension)
+    function isPlayableFile(f) {
+      if (f.isFolder) return false;
+      const mime = (f.mimeType || '').toLowerCase();
+      if (mime.startsWith('video/') || mime.startsWith('audio/')) return true;
+      const ext = (f.name || '').split('.').pop().toLowerCase();
+      return ['mp4', 'mkv', 'avi', 'mov', 'webm', 'm4v', 'ts', 'flv', 'wmv', 'mpg', 'mpeg', '3gp', 'mp3', 'm4a', 'flac', 'wav', 'ogg'].includes(ext);
+    }
+
+    // Build deep-link URLs for external players
+    function playerUrl(f, streamUrl) {
+      const name = encodeURIComponent(f.name);
+      const u = new URL(streamUrl);
+      // MX Player: intent scheme so the Android app can open the stream
+      const mx = `intent://${u.host}${u.pathname}${u.search}#Intent;scheme=${u.protocol.replace(':', '')};package=com.mxtech.videoplayer.ad;S.title=${name};type=video/*;end`;
+      // VLC / PotPlayer accept direct stream links
+      const vlc = streamUrl;
+      const pot = streamUrl;
+      return { mx, vlc, pot };
+    }
+
+    let currentStream = null; // { name, streamUrl }
+    function openStreamModal(f) {
+      const streamUrl = `${window.location.origin}/api/file?id=${f.id}`;
+      currentStream = { name: f.name, streamUrl };
+      document.getElementById('stream-modal-title').textContent = f.name;
+      document.getElementById('stream-modal-file').textContent = streamUrl;
+      const links = playerUrl(f, streamUrl);
+      document.getElementById('stream-browser-btn').href = streamUrl;
+      document.getElementById('stream-mx-btn').href = links.mx;
+      document.getElementById('stream-vlc-btn').href = links.vlc;
+      document.getElementById('stream-pot-btn').href = links.pot;
+      document.getElementById('stream-modal').style.display = 'flex';
+    }
+    function closeStreamModal() {
+      document.getElementById('stream-modal').style.display = 'none';
+    }
+    document.getElementById('stream-copy-btn').addEventListener('click', async () => {
+      if (!currentStream) return;
+      await navigator.clipboard.writeText(currentStream.streamUrl);
+      const btn = document.getElementById('stream-copy-btn');
+      btn.textContent = '✅ Copied!';
+      setTimeout(() => btn.textContent = '🔗 Copy Stream Link', 2000);
+    });
+    document.getElementById('stream-close-btn').addEventListener('click', closeStreamModal);
+    document.getElementById('stream-modal').addEventListener('click', (e) => {
+      if (e.target === document.getElementById('stream-modal')) closeStreamModal();
+    });
+
     function renderFiles(files) {
       fileContainer.innerHTML = '';
-      fileFooter.textContent = `${files.length} item(s)`;
+      
+      let totalSize = 0;
+      files.forEach(f => {
+        if (!f.isFolder && f.size) {
+          totalSize += parseInt(f.size, 10) || 0;
+        }
+      });
+      
+      fileFooter.textContent = `${files.length} item(s) | Size ${formatBytes(totalSize)}`;
 
       if (files.length === 0) {
         fileContainer.innerHTML = '<div style="padding: 20px; text-align: center; color: var(--text-muted);">Folder is empty</div>';
@@ -670,6 +795,7 @@
         nameA.href = '#';
         
         const fileUrl = `${window.location.origin}/api/file?id=${f.id}`;
+        const downloadUrl = `${fileUrl}&download=1`;
 
         if (f.isFolder) {
           nameA.onclick = (e) => {
@@ -677,7 +803,14 @@
             folderHistory.push({ id: f.id, name: f.name });
             loadFiles(f.id);
           };
+        } else if (isPlayableFile(f)) {
+          // Clicking the title of a video/audio opens the streaming options
+          nameA.onclick = (e) => {
+            e.preventDefault();
+            openStreamModal(f);
+          };
         } else {
+          // Non-media files open inline as before
           nameA.href = fileUrl;
           nameA.target = '_blank';
         }
@@ -724,20 +857,30 @@
           };
           actCol.appendChild(cpBtn);
         } else {
-          // Download Btn
+          // Stream Btn (media files) — opens player options (MX/VLC/PotPlayer/browser)
+          if (isPlayableFile(f)) {
+            const stBtn = document.createElement('button');
+            stBtn.className = 'act-btn';
+            stBtn.title = 'Stream';
+            stBtn.innerHTML = '▶️';
+            stBtn.onclick = () => openStreamModal(f);
+            actCol.appendChild(stBtn);
+          }
+
+          // Download Btn — forces the browser to save the file (attachment)
           const dlBtn = document.createElement('button');
           dlBtn.className = 'act-btn';
           dlBtn.title = 'Download';
           dlBtn.innerHTML = '⬇️';
-          dlBtn.onclick = () => window.open(fileUrl, '_blank');
+          dlBtn.onclick = () => window.open(downloadUrl, '_blank');
           
-          // Copy Btn
+          // Copy Btn — copies the DOWNLOAD link, so pasting saves the file
           const cpBtn = document.createElement('button');
           cpBtn.className = 'act-btn';
-          cpBtn.title = 'Copy Link';
+          cpBtn.title = 'Copy Download Link';
           cpBtn.innerHTML = '🔗';
           cpBtn.onclick = () => {
-            navigator.clipboard.writeText(fileUrl);
+            navigator.clipboard.writeText(downloadUrl);
             cpBtn.innerHTML = '✅';
             setTimeout(() => cpBtn.innerHTML = '🔗', 2000);
           };
@@ -791,24 +934,43 @@
     }
 
     // Search
+    let searchTimeout;
     document.getElementById('search-box').addEventListener('input', (e) => {
-      const q = e.target.value.toLowerCase();
-      const items = fileContainer.querySelectorAll('.file-item');
-      items.forEach(item => {
-        const name = item.querySelector('.file-name').textContent.toLowerCase();
-        if (name.includes(q)) {
-          item.style.display = 'grid';
-        } else {
-          item.style.display = 'none';
-          // Deselect hidden items
-          const chk = item.querySelector('.row-checkbox');
-          if(chk.checked) {
-            chk.checked = false;
-            item.classList.remove('selected');
-          }
+      const q = e.target.value.trim();
+      clearTimeout(searchTimeout);
+      
+      if (!q) {
+        // If empty, reload the current folder
+        if (currentFolderId) {
+          loadFiles(currentFolderId);
         }
-      });
-      updateSelection();
+        return;
+      }
+      
+      searchTimeout = setTimeout(async () => {
+        fileContainer.innerHTML = '<div class="loader"></div>';
+        try {
+          const headers = {};
+          if (currentToken) headers['Authorization'] = `Bearer ${currentToken}`;
+          const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`, { headers });
+          
+          if (res.status === 401) {
+            document.getElementById('logout-btn').click();
+            return;
+          }
+          
+          const data = await res.json();
+          if (data.success) {
+            currentFiles = data.files;
+            currentShortUrl = null;
+            renderFiles(currentFiles);
+          } else {
+            fileContainer.innerHTML = `<div style="padding: 20px; color: red;">Search failed: ${data.message}</div>`;
+          }
+        } catch (err) {
+          fileContainer.innerHTML = `<div style="padding: 20px; color: red;">Network Error: ${err.message}</div>`;
+        }
+      }, 600);
     });
 
     // Bulk Copy
@@ -819,7 +981,7 @@
       let links = [];
       selected.forEach(chk => {
         if (chk.dataset.isfolder !== "true") {
-          links.push(`${window.location.origin}/api/file?id=${chk.dataset.id}`);
+          links.push(`${window.location.origin}/api/file?id=${chk.dataset.id}&download=1`);
         }
       });
 
@@ -868,7 +1030,7 @@
           count++;
           // Stagger downloads to prevent browser blocking
           setTimeout(() => {
-            window.open(`/api/file?id=${chk.dataset.id}`, '_blank');
+            window.open(`/api/file?id=${chk.dataset.id}&download=1`, '_blank');
           }, count * 500);
         }
       });
