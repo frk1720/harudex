@@ -9,6 +9,7 @@ interface Env {
 	GD_REFRESH_TOKEN: string;
 	GD_ROOT_FOLDER: string;
 	DB: D1Database;
+	ASSETS: Fetcher;
 }
 
 // Global cache for access token to avoid fetching it on every request
@@ -63,19 +64,11 @@ export default {
 			});
 		}
 
-		// Shortlink redirect: /s/<code> -> /?folder=<folderId>
+		// Legacy alias: /s/<code> -> /folder/<code> (SPA serves the app for /folder/*)
 		if (url.pathname.startsWith('/s/')) {
 			const code = url.pathname.slice(3);
 			if (!code) return new Response('Missing code', { status: 400 });
-
-			try {
-				const row = await env.DB.prepare('SELECT folder_id FROM shortlinks WHERE code = ?').bind(code).first<{ folder_id: string }>();
-				if (!row) return new Response('Shortlink not found', { status: 404 });
-				const redirectUrl = new URL(`/?folder=${encodeURIComponent(row.folder_id)}`, request.url).toString();
-				return Response.redirect(redirectUrl, 302);
-			} catch (err: any) {
-				return new Response(err.message, { status: 500 });
-			}
+			return Response.redirect(new URL(`/folder/${code}`, request.url).toString(), 308);
 		}
 
 		// Handle API routes
@@ -117,7 +110,7 @@ export default {
 					                    const origin = new URL(request.url).origin;
 					                    const filesWithLinks = files.map((f) => {
 					                        if (f.isFolder && codeByFolder[f.id]) {
-					                            return { ...f, shortUrl: `${origin}/s/${codeByFolder[f.id]}` };
+					                            return { ...f, shortUrl: `${origin}/folder/${codeByFolder[f.id]}` };
 					                        }
 					                        return f;
 					                    });
@@ -127,7 +120,7 @@ export default {
 					                    return Response.json({
 					                        success: true,
 					                        currentId: folderId,
-					                        currentShortUrl: `${origin}/s/${currentCode}`,
+					                        currentShortUrl: `${origin}/folder/${currentCode}`,
 					                        files: filesWithLinks,
 					                    });
 				} catch (err: any) {
@@ -135,7 +128,7 @@ export default {
 				}
 			}
 
-			// Get or create a shortlink for a folder
+			// Endpoint to create shortlink: /api/shortlink?folder=<id>&name=<name>
 			if (url.pathname === '/api/shortlink' && request.method === 'GET') {
 				const authHeader = request.headers.get('Authorization');
 				if (authHeader !== `Bearer ${todayToken()}`) {
@@ -151,8 +144,22 @@ export default {
 					return Response.json({
 						success: true,
 						code,
-						url: `${new URL(request.url).origin}/s/${code}`,
+						url: `${new URL(request.url).origin}/folder/${code}`,
 					});
+				} catch (err: any) {
+					return Response.json({ success: false, message: err.message }, { status: 500 });
+				}
+			}
+
+			// Resolve a short code to its folder (public — used by the SPA on /folder/<code>)
+			if (url.pathname === '/api/resolve' && request.method === 'GET') {
+				const code = url.searchParams.get('code');
+				if (!code) return Response.json({ success: false, message: 'Missing code' }, { status: 400 });
+
+				try {
+					const row = await env.DB.prepare('SELECT folder_id, name FROM shortlinks WHERE code = ?').bind(code).first<{ folder_id: string; name: string }>();
+					if (!row) return Response.json({ success: false, message: 'Shortlink not found' }, { status: 404 });
+					return Response.json({ success: true, folderId: row.folder_id, name: row.name });
 				} catch (err: any) {
 					return Response.json({ success: false, message: err.message }, { status: 500 });
 				}

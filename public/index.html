@@ -449,12 +449,30 @@
     let currentFiles = [];
     let currentShortUrl = null;
 
-    // Support shortlink deep links: /?folder=<driveFolderId>
-    const urlParams = new URLSearchParams(window.location.search);
-    const deepFolder = urlParams.get('folder');
-    if (deepFolder) {
-      currentFolderId = deepFolder;
-      folderHistory = [{ id: 'root', name: 'Root' }, { id: deepFolder, name: 'Shortlink' }];
+    // Deep link support: /folder/<code> never exposes the Drive folder ID.
+    // Resolve the short code to its Drive folder via the API.
+    let pendingDeepFolder = null;
+    const pathMatch = window.location.pathname.match(/^\/folder\/([A-Za-z0-9]+)/);
+    if (pathMatch) {
+      fetch(`/api/resolve?code=${pathMatch[1]}`)
+        .then((r) => r.json())
+        .then((data) => {
+          if (data.success) {
+            pendingDeepFolder = { id: data.folderId, name: data.name || 'Folder' };
+            if (currentToken) applyDeepFolder();
+          }
+        })
+        .catch(() => {});
+    }
+
+    function applyDeepFolder() {
+      if (!pendingDeepFolder) return;
+      currentFolderId = pendingDeepFolder.id;
+      folderHistory = [
+        { id: 'root', name: 'Root' },
+        { id: pendingDeepFolder.id, name: pendingDeepFolder.name },
+      ];
+      loadFiles(currentFolderId);
     }
 
     // Format bytes
@@ -514,7 +532,11 @@
     function showExplorer() {
       loginScreen.style.display = 'none';
       explorerScreen.style.display = 'flex';
-      loadFiles(currentFolderId);
+      if (pendingDeepFolder) {
+        applyDeepFolder();
+      } else {
+        loadFiles(currentFolderId);
+      }
     }
 
     function renderBreadcrumb() {
@@ -561,10 +583,16 @@
         if (data.success) {
           currentFiles = data.files;
           currentShortUrl = data.currentShortUrl || null;
-          // Keep the address bar in sync with the current folder (deep-linkable)
-          const url = new URL(window.location.href);
-          url.searchParams.set('folder', folderId);
-          window.history.replaceState({}, '', url);
+          // Keep the address bar clean: /folder/<code> — never expose the Drive ID.
+          if (currentShortUrl) {
+            const codeMatch = currentShortUrl.match(/\/folder\/([A-Za-z0-9]+)$/);
+            if (codeMatch) {
+              const url = new URL(window.location.href);
+              url.pathname = `/folder/${codeMatch[1]}`;
+              url.search = '';
+              window.history.replaceState({}, '', url);
+            }
+          }
           renderFiles(currentFiles);
         } else {
           fileContainer.innerHTML = `<div style="padding: 20px; color: red;">Error: ${data.message}</div>`;
