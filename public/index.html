@@ -1,32 +1,456 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-	<head>
-		<meta charset="UTF-8" />
-		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-		<title>Hello, World!</title>
-	</head>
-	<body>
-		<h1 id="heading"></h1>
-		<p>This page comes from a static asset stored at `public/index.html` as configured in `wrangler.jsonc`.</p>
-		<button id="button" type="button">Fetch a random UUID</button>
-		<output id="random" for="button"></output>
-		<script>
-			fetch('/message')
-				.then((resp) => resp.text())
-				.then((text) => {
-					const h1 = document.getElementById('heading');
-					h1.textContent = text;
-				});
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HaruDex - Spring Drive Index</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌸</text></svg>">
+  <style>
+    :root {
+      --haru-pink: #ff6b9e;
+      --haru-pink-light: #ff9cc0;
+      --haru-bg: #fdf5f7;
+      --haru-surface: rgba(255, 255, 255, 0.85);
+      --text-dark: #333;
+      --text-muted: #777;
+    }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: linear-gradient(135deg, #fdf5f7 0%, #fff0f5 100%);
+      color: var(--text-dark);
+      margin: 0;
+      padding: 0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow-x: hidden;
+      max-width: 100vw;
+    }
+    /* Header */
+    header {
+      background: var(--haru-surface);
+      backdrop-filter: blur(10px);
+      padding: 15px 30px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      box-shadow: 0 4px 6px rgba(255, 107, 158, 0.1);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .logo {
+      font-size: 1.5rem;
+      font-weight: 800;
+      color: var(--haru-pink);
+      text-decoration: none;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .logout-btn {
+      background: var(--haru-pink);
+      color: white;
+      text-decoration: none;
+      padding: 8px 16px;
+      border-radius: 20px;
+      font-size: 0.9rem;
+      font-weight: bold;
+      transition: background 0.3s;
+    }
+    .logout-btn:hover {
+      background: #e65287;
+    }
+    /* Container */
+    .container {
+      max-width: 95%;
+      margin: 30px auto;
+      padding: 0 20px;
+      flex: 1;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    /* Login Box */
+    .login-box {
+      background: var(--haru-surface);
+      backdrop-filter: blur(15px);
+      padding: 40px;
+      border-radius: 16px;
+      box-shadow: 0 10px 30px rgba(255, 107, 158, 0.15);
+      text-align: center;
+      max-width: 400px;
+      margin: 100px auto;
+    }
+    .login-box h2 {
+      color: var(--haru-pink);
+      margin-bottom: 10px;
+    }
+    .login-box input {
+      width: 100%;
+      padding: 12px;
+      margin: 15px 0;
+      border: 2px solid var(--haru-pink-light);
+      border-radius: 8px;
+      box-sizing: border-box;
+      outline: none;
+      font-size: 1rem;
+    }
+    .login-box input:focus {
+      border-color: var(--haru-pink);
+    }
+    .login-box button {
+      width: 100%;
+      padding: 12px;
+      background: var(--haru-pink);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: bold;
+      cursor: pointer;
+      transition: background 0.3s;
+    }
+    .login-box button:hover {
+      background: #e65287;
+    }
+    .error {
+      color: red;
+      font-size: 0.9rem;
+      margin-bottom: 10px;
+    }
+    /* File Explorer */
+    .breadcrumb-bar {
+      background: var(--haru-surface);
+      padding: 12px 20px;
+      border-radius: 12px 12px 0 0;
+      border-bottom: 1px solid var(--haru-pink-light);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 600;
+      color: var(--text-dark);
+      font-family: 'Inter', sans-serif;
+      white-space: nowrap;
+      overflow-x: auto;
+      box-sizing: border-box;
+      max-width: 100%;
+    }
+    .breadcrumb-bar a {
+      color: var(--text-muted);
+      text-decoration: none;
+    }
+    .breadcrumb-bar a:hover {
+      color: var(--haru-pink);
+    }
+    .toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: var(--haru-surface);
+      padding: 15px 20px;
+      border-radius: 0 0 12px 12px;
+      box-shadow: 0 4px 15px rgba(255, 107, 158, 0.15);
+      flex-wrap: wrap;
+      gap: 15px;
+      margin-bottom: 20px;
+    }
+    .search-box {
+      background: white;
+      border: 1px solid var(--haru-pink-light);
+      color: var(--text-dark);
+      padding: 10px 15px;
+      border-radius: 8px;
+      width: 300px;
+      outline: none;
+      font-family: 'Inter', sans-serif;
+    }
+    .search-box:focus {
+      border-color: var(--haru-pink);
+    }
+    .actions {
+      display: flex;
+      gap: 10px;
+    }
+    .btn {
+      background: white;
+      border: 1px solid var(--haru-pink-light);
+      color: var(--text-dark);
+      padding: 10px 20px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: all 0.2s;
+      font-size: 0.9rem;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .btn-copy {
+      border-color: #ff9cc0;
+      color: var(--haru-pink);
+    }
+    .btn-copy:hover {
+      background: #fff0f5;
+    }
+    .btn-download {
+      background: var(--haru-pink);
+      border-color: var(--haru-pink);
+      color: white;
+    }
+    .btn-download:hover {
+      background: #e65287;
+    }
+    .file-list {
+      background: var(--haru-surface);
+      color: var(--text-dark);
+      border-radius: 12px;
+      box-shadow: 0 4px 15px rgba(255, 107, 158, 0.15);
+      overflow-x: auto;
+      font-family: 'Inter', sans-serif;
+    }
+    .file-header {
+      display: grid;
+      grid-template-columns: 40px minmax(200px, 1fr) 150px 100px 100px;
+      min-width: 650px;
+      padding: 15px 20px;
+      background: #fff0f5;
+      font-weight: 600;
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--haru-pink-light);
+    }
+    .file-item {
+      display: grid;
+      grid-template-columns: 40px minmax(200px, 1fr) 150px 100px 100px;
+      min-width: 650px;
+      align-items: center;
+      padding: 16px 20px;
+      border-bottom: 1px solid #f0f0f0;
+      transition: background 0.2s;
+    }
+    .file-item:last-child {
+      border-bottom: none;
+    }
+    .file-item:hover {
+      background: #fff0f5;
+    }
+    .file-footer {
+      padding: 12px 20px;
+      background: #fff0f5;
+      text-align: center;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      border-top: 1px solid var(--haru-pink-light);
+    }
+    .name-col {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .file-checkbox {
+      margin-right: 15px;
+      accent-color: var(--haru-pink);
+      width: 18px;
+      height: 18px;
+    }
+    .file-icon {
+      font-size: 1.2rem;
+    }
+    .file-name {
+      font-weight: 600;
+      color: var(--text-dark);
+      text-decoration: none;
+      word-break: normal;
+      overflow-wrap: break-word;
+      cursor: pointer;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      line-height: 1.4;
+    }
+    .file-name:hover {
+      text-decoration: underline;
+    }
+    .file-meta {
+      color: var(--text-muted);
+      font-size: 0.85rem;
+      white-space: nowrap;
+    }
+    .dl-btn {
+      background: none;
+      border: 1px solid var(--haru-pink);
+      color: var(--haru-pink);
+      border-radius: 4px;
+      padding: 5px 10px;
+      cursor: pointer;
+      font-size: 0.8rem;
+      transition: 0.2s;
+    }
+    .dl-btn:hover {
+      background: var(--haru-pink);
+      color: white;
+    }
+    .overlay {
+      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(0,0,0,0.8); z-index: 2000;
+      display: none; justify-content: center; align-items: center;
+      color: white; font-size: 1.5rem; font-weight: bold; flex-direction: column;
+    }
+    /* Modal */
+    .modal-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.6);
+      display: none;
+      justify-content: center;
+      align-items: center;
+      z-index: 1000;
+      backdrop-filter: blur(5px);
+    }
+    .modal {
+      background: white;
+      border-radius: 16px;
+      width: 95%;
+      max-width: 900px;
+      overflow: hidden;
+      box-shadow: 0 20px 40px rgba(0,0,0,0.2);
+    }
+    .modal-header {
+      padding: 15px 20px;
+      background: var(--haru-bg);
+      border-bottom: 1px solid #eee;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .modal-header h3 {
+      margin: 0;
+      color: var(--haru-pink);
+      overflow-wrap: break-word;
+      word-break: normal;
+      font-size: 1.1rem;
+      line-height: 1.4;
+    }
+    .close-btn {
+      background: none;
+      border: none;
+      font-size: 1.5rem;
+      cursor: pointer;
+      color: var(--text-muted);
+    }
+    .modal-body {
+      padding: 0;
+    }
+    video {
+      width: 100%;
+      background: #000;
+      max-height: 80vh;
+    }
+    .modal-footer {
+      padding: 15px 20px;
+      background: white;
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    .btn-external {
+      background: #f0f0f0;
+      color: var(--text-dark);
+      border: none;
+      padding: 10px 15px;
+      border-radius: 8px;
+      font-weight: 600;
+      text-decoration: none;
+      font-size: 0.9rem;
+      transition: background 0.2s;
+    }
+    .btn-external:hover {
+      background: #e0e0e0;
+    }
+    .btn-external.primary {
+      background: var(--haru-pink);
+      color: white;
+    }
+    .btn-external.primary:hover {
+      background: #e65287;
+    }
+    /* Loading Spinner */
+    .loader {
+      border: 4px solid #f3f3f3;
+      border-top: 4px solid var(--haru-pink);
+      border-radius: 50%;
+      width: 40px;
+      height: 40px;
+      animation: spin 1s linear infinite;
+      margin: 50px auto;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    
+    /* Mobile Responsiveness */
+    @media (max-width: 768px) {
+      .file-header, .file-item {
+        padding: 12px 10px;
+      }
+      .toolbar {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      .search-box {
+        width: 100%;
+        margin-bottom: 10px;
+        box-sizing: border-box;
+      }
+      .actions {
+        justify-content: flex-start;
+      }
+      .btn {
+        flex: unset;
+        font-size: 0.85rem;
+        padding: 8px 12px;
+      }
+      .modal-header h3 {
+        font-size: 0.95rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <!-- App Container (Login/Explorer will be injected here) -->
+  <div id="app">
+    <div class="login-box">
+      <div style="font-size: 2rem; font-weight: 800; background: linear-gradient(45deg, var(--haru-pink), var(--haru-pink-light)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 10px;">🌸 HaruDex</div>
+      <p>Enter your password to access HaruDex storage.</p>
+      <form id="login-form">
+        <input type="password" id="password-input" placeholder="Password..." autofocus required />
+        <button type="submit">Access Now</button>
+      </form>
+    </div>
+  </div>
 
-			const button = document.getElementById("button");
-			button.addEventListener("click", () => {
-				fetch('/random')
-					.then((resp) => resp.text())
-					.then((text) => {
-						const random = document.getElementById('random');
-						random.textContent = text;
-					});
-			});
-		</script>
-	</body>
+  <script>
+    document.getElementById('login-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const password = document.getElementById('password-input').value;
+      const response = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password })
+      });
+      
+      const data = await response.json();
+      if (data.success) {
+        alert("Login success! (Mocked for now)");
+      } else {
+        alert("Incorrect password");
+      }
+    });
+  </script>
+</body>
 </html>
