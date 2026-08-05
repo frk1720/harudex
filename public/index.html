@@ -733,7 +733,8 @@
 
     let currentStream = null; // { name, streamUrl }
     function openStreamModal(f) {
-      const streamUrl = `${window.location.origin}/api/file?id=${f.id}`;
+      // Put the filename in the path so external players (PotPlayer/VLC/MX) use it as the title.
+      const streamUrl = `${window.location.origin}/api/file/${encodeURIComponent(f.name)}?id=${f.id}`;
       currentStream = { name: f.name, streamUrl };
       document.getElementById('stream-modal-title').textContent = f.name;
       document.getElementById('stream-modal-file').textContent = streamUrl;

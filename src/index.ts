@@ -294,7 +294,7 @@ export default {
 			// Endpoint to download/proxy file.
 			//   /api/file?id=X            -> stream inline (media player can seek)
 			//   /api/file?id=X&download=1 -> force download (attachment)
-			if (url.pathname === '/api/file') {
+			if (url.pathname === '/api/file' || url.pathname.startsWith('/api/file/')) {
 				// File access is PUBLIC (bypasses auth)
 				// Anyone with the file ID can access it directly.
 
@@ -470,7 +470,10 @@ async function streamFile(request: Request, fileId: string, accessToken: string,
 
 	const meta: any = await metaRes.json();
 	const disposition = asDownload ? 'attachment' : 'inline';
-	const contentDisposition = `${disposition}; filename*=UTF-8''${encodeURIComponent(meta.name || 'file')}`;
+	const displayName = meta.name || 'file';
+	// Plain filename for players that ignore RFC 5987 (filename*), plus the RFC 5987 form for non-ASCII names.
+	const fallbackName = displayName.replace(/[^\x20-\x7E]/g, '_').replace(/["\\]/g, '_') || 'file';
+	const contentDisposition = `${disposition}; filename="${fallbackName}"; filename*=UTF-8''${encodeURIComponent(displayName)}`;
 
 	// HEAD requests (used by video players to probe metadata) return no body.
 	if (request.method === 'HEAD') {
