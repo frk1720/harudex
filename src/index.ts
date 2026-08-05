@@ -79,19 +79,15 @@ export default {
 		}
 
 		// Direct download link: /file/<code>/<name> — hides the Google Drive file ID.
-		// Redirects the client straight to Google's download CDN for full speed (requires
-		// the file to be shared "Anyone with the link can view").
-		// Stream link: /stream/<code>/<name> — same hidden code, but the worker streams
-		// inline (players can seek) and the ID never appears in the URL.
+		// Stream link: /stream/<code>/<name> — same, but streams inline for players.
+		// The short code maps to the file in D1 and the worker streams the file, so the
+		// ID never appears in the URL.
 		if (url.pathname.startsWith('/file/') || url.pathname.startsWith('/stream/')) {
 			const parts = url.pathname.split('/').filter(Boolean);
 			const code = parts[1];
 			if (!code) return new Response('Missing code', { status: 400 });
 			try {
-				if (url.pathname.startsWith('/file/')) {
-					return await redirectFileDownload(env, code);
-				}
-				return await serveFileLink(request, env, code);
+				return await serveFileLink(request, env, code, url.pathname.startsWith('/file/'));
 			} catch (err: any) {
 				return new Response(err.message, { status: 500 });
 			}
@@ -520,22 +516,13 @@ async function ensureFileLink(db: D1Database, fileId: string, name: string): Pro
 	throw new Error('Failed to create file link');
 }
 
-// Serves the file mapped to a short code for inline streaming without exposing the Drive ID.
-async function serveFileLink(request: Request, env: Env, code: string): Promise<Response> {
+// Serves the file mapped to a short code without exposing the Drive ID.
+// asDownload=true forces an attachment (used by /file/); false streams inline (used by /stream/).
+async function serveFileLink(request: Request, env: Env, code: string, asDownload: boolean): Promise<Response> {
 	const row = await env.DB.prepare('SELECT file_id FROM file_links WHERE code = ?').bind(code).first<{ file_id: string }>();
 	if (!row) return new Response('Link not found', { status: 404 });
 	const accessToken = await getAccessToken(env);
-	return await streamFile(request, row.file_id, accessToken, false);
-}
-
-// Fast download: 302 to Google's download CDN. The shared link stays /file/<code>/<name>
-// (no Drive ID); the browser lands on Google's CDN and downloads at full speed.
-// The Drive file must be shared with "Anyone with the link can view".
-async function redirectFileDownload(env: Env, code: string): Promise<Response> {
-	const row = await env.DB.prepare('SELECT file_id FROM file_links WHERE code = ?').bind(code).first<{ file_id: string }>();
-	if (!row) return new Response('Link not found', { status: 404 });
-	const target = `https://drive.usercontent.google.com/download?id=${row.file_id}&export=download&confirm=t`;
-	return Response.redirect(target, 302);
+	return await streamFile(request, row.file_id, accessToken, asDownload);
 }
 
 // Streams a Google Drive file through the worker, preserving Range
