@@ -448,30 +448,47 @@
     let folderHistory = [{ id: 'root', name: 'Root' }];
     let currentFiles = [];
     let currentShortUrl = null;
+    // Public shortlink code — set when visiting /folder/<code>. Lets users
+    // browse the shared folder (and everything inside it) without logging in.
+    let publicCode = null;
 
     // Deep link support: /folder/<code> never exposes the Drive folder ID.
     // Resolve the short code to its Drive folder via the API.
     let pendingDeepFolder = null;
     const pathMatch = window.location.pathname.match(/^\/folder\/([A-Za-z0-9]+)/);
     if (pathMatch) {
+      publicCode = pathMatch[1];
       fetch(`/api/resolve?code=${pathMatch[1]}`)
         .then((r) => r.json())
         .then((data) => {
           if (data.success) {
             pendingDeepFolder = { id: data.folderId, name: data.name || 'Folder' };
-            if (currentToken) applyDeepFolder();
+            showExplorer();
+          } else if (currentToken) {
+            showExplorer();
+          } else {
+            // Invalid code and not logged in — show the login screen again
+            loginScreen.style.display = 'block';
           }
         })
-        .catch(() => {});
+        .catch(() => {
+          if (currentToken) showExplorer();
+          else loginScreen.style.display = 'block';
+        });
     }
 
     function applyDeepFolder() {
       if (!pendingDeepFolder) return;
       currentFolderId = pendingDeepFolder.id;
-      folderHistory = [
-        { id: 'root', name: 'Root' },
-        { id: pendingDeepFolder.id, name: pendingDeepFolder.name },
-      ];
+      if (publicCode) {
+        // Public mode: the shared folder is the top of the visible tree
+        folderHistory = [{ id: pendingDeepFolder.id, name: pendingDeepFolder.name }];
+      } else {
+        folderHistory = [
+          { id: 'root', name: 'Root' },
+          { id: pendingDeepFolder.id, name: pendingDeepFolder.name },
+        ];
+      }
       loadFiles(currentFolderId);
     }
 
@@ -510,6 +527,8 @@
       if (data.success) {
         localStorage.setItem('harudex_token', data.token);
         currentToken = data.token;
+        // After logging in, the user has full access — clear public mode
+        publicCode = null;
         showExplorer();
       } else {
         alert("Incorrect password");
@@ -524,9 +543,13 @@
       explorerScreen.style.display = 'none';
     });
 
-    // Check auth on load
-    if (currentToken) {
+    // Check auth on load — unless we're resolving a public shortlink first
+    if (currentToken && !pathMatch) {
       showExplorer();
+    }
+    if (pathMatch && !currentToken) {
+      // Public mode: hide login immediately; explorer shows once resolved
+      loginScreen.style.display = 'none';
     }
 
     function showExplorer() {
@@ -570,9 +593,12 @@
       updateSelection();
 
       try {
-        const res = await fetch(`/api/list?id=${folderId}`, {
-          headers: { 'Authorization': `Bearer ${currentToken}` }
-        });
+        // Public shared folders can be browsed without a token (code acts as the key)
+        const headers = {};
+        if (currentToken) headers['Authorization'] = `Bearer ${currentToken}`;
+        let listUrl = `/api/list?id=${encodeURIComponent(folderId)}`;
+        if (publicCode) listUrl += `&code=${encodeURIComponent(publicCode)}`;
+        const res = await fetch(listUrl, { headers });
 
         if (res.status === 401) {
           document.getElementById('logout-btn').click();

@@ -98,38 +98,58 @@ export default {
 				}
 			}
 
-			// Endpoint to list files from Google Drive
+			// Endpoint to list files from Google Drive.
+			// Access rules:
+			//   - If a public shortlink code is provided, the folder is served WITHOUT login
+			//     if it is (or is nested inside) the shared folder.
+			//   - Otherwise a valid daily token is required.
 			if (url.pathname === '/api/list') {
-				// Daily Auth Check
-				const authHeader = request.headers.get('Authorization');
-				if (authHeader !== `Bearer ${todayToken()}`) {
+				const publicCode = url.searchParams.get('code');
+				const folderId = url.searchParams.get('id') || env.GD_ROOT_FOLDER || 'root';
+
+				// Determine if this request is allowed
+				let authorized = false;
+				if (publicCode) {
+					try {
+						const shared = await env.DB.prepare('SELECT folder_id FROM shortlinks WHERE code = ?').bind(publicCode).first<{ folder_id: string }>();
+						if (shared) {
+							const accessToken = await getAccessToken(env);
+							authorized = folderId === shared.folder_id || (await isDescendant(accessToken, folderId, shared.folder_id));
+						}
+					} catch (e) {
+						// fall through to token check if anything goes wrong
+					}
+				}
+				if (!authorized) {
+					const authHeader = request.headers.get('Authorization');
+					authorized = authHeader === `Bearer ${todayToken()}`;
+				}
+				if (!authorized) {
 					return Response.json({ success: false, message: 'Unauthorized or token expired' }, { status: 401 });
 				}
 
-				const folderId = url.searchParams.get('id') || env.GD_ROOT_FOLDER || 'root';
-
 				try {
-					                    const accessToken = await getAccessToken(env);
-					                    const files = await listFolder(accessToken, folderId);
+					const accessToken = await getAccessToken(env);
+					const files = await listFolder(accessToken, folderId);
 
-					                    // Ensure every folder (incl. subfolders shown here) has its own short URL
-					                    const codeByFolder = await ensureShortlinks(env.DB, files.filter((f) => f.isFolder));
-					                    const origin = new URL(request.url).origin;
-					                    const filesWithLinks = files.map((f) => {
-					                        if (f.isFolder && codeByFolder[f.id]) {
-					                            return { ...f, shortUrl: `${origin}/folder/${codeByFolder[f.id]}` };
-					                        }
-					                        return f;
-					                    });
+					// Ensure every folder (incl. subfolders shown here) has its own short URL
+					const codeByFolder = await ensureShortlinks(env.DB, files.filter((f) => f.isFolder));
+					const origin = new URL(request.url).origin;
+					const filesWithLinks = files.map((f) => {
+						if (f.isFolder && codeByFolder[f.id]) {
+							return { ...f, shortUrl: `${origin}/folder/${codeByFolder[f.id]}` };
+						}
+						return f;
+					});
 
-					                    // Also ensure the current folder itself has a short URL
-					                    const currentCode = await ensureShortlink(env.DB, folderId, '');
-					                    return Response.json({
-					                        success: true,
-					                        currentId: folderId,
-					                        currentShortUrl: `${origin}/folder/${currentCode}`,
-					                        files: filesWithLinks,
-					                    });
+					// Also ensure the current folder itself has a short URL
+					const currentCode = await ensureShortlink(env.DB, folderId, '');
+					return Response.json({
+						success: true,
+						currentId: folderId,
+						currentShortUrl: `${origin}/folder/${currentCode}`,
+						files: filesWithLinks,
+					});
 				} catch (err: any) {
 					return Response.json({ success: false, message: err.message }, { status: 500 });
 				}
@@ -272,6 +292,25 @@ async function listFolder(accessToken: string, folderId: string): Promise<any[]>
 		modifiedTime: f.modifiedTime,
 		isFolder: f.mimeType === 'application/vnd.google-apps.folder',
 	}));
+}
+
+// Walks up the Google Drive parent chain from `folderId` to check whether
+// it is `ancestorId` itself or nested somewhere inside it. Used to allow
+// public access to a shared folder and everything beneath it.
+async function isDescendant(accessToken: string, folderId: string, ancestorId: string): Promise<boolean> {
+	let current = folderId;
+	for (let i = 0; i < 30; i++) {
+		if (current === ancestorId) return true;
+		const res = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(current)}?fields=parents`, {
+			headers: { Authorization: `Bearer ${accessToken}` },
+		});
+		if (!res.ok) return false;
+		const data: any = await res.json();
+		const parent = Array.isArray(data.parents) ? data.parents[0] : undefined;
+		if (!parent) return false;
+		current = parent;
+	}
+	return false;
 }
 
 // ---------- Shortlink helpers ----------
