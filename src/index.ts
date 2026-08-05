@@ -52,6 +52,13 @@ function todayToken(): string {
 	return `killdrive-token-${dateStr}`;
 }
 
+// Normalizes common typos when typing/pasting a password:
+// - trims accidental leading/trailing whitespace
+// - treats curly apostrophes (U+2018/U+2019) as a straight apostrophe (U+0027)
+function normalizePassword(value: string): string {
+	return (value || '').trim().replace(/[\u2018\u2019]/g, "'");
+}
+
 export default {
 	async fetch(request, env, ctx): Promise<Response> {
 		const url = new URL(request.url);
@@ -77,9 +84,9 @@ export default {
 			if (url.pathname === '/api/login' && request.method === 'POST') {
 				try {
 					const body: any = await request.json();
-					const password = body.password;
+					const password = normalizePassword(body.password);
 
-					const sitePass = env.SITE_PASSWORD || 'harudex';
+					const sitePass = normalizePassword(env.SITE_PASSWORD || 'harudex');
 					if (password === sitePass) {
 						// Create token with today's date (UTC+7)
 						return Response.json({ success: true, token: todayToken() });
