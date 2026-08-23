@@ -77,6 +77,34 @@ export default {
 			if (!code) return new Response('Missing code', { status: 400 });
 			return Response.redirect(new URL(`/folder/${code}`, request.url).toString(), 308);
 		}
+		// Mirror-bot deep link: /findpath?id=<driveId> — used by Telegram mirror bots
+		// (e.g. "Index Link"). Resolves the Drive file/folder and redirects to the
+		// appropriate hidden-ID shortlink. Files -> /file/<code>/<name> (direct, masked);
+		// folders -> /folder/<code> (SPA opens the shared folder publicly).
+		// Accept the Drive id from EITHER the query (?id=) or the path
+		// (/findpath/<id>, /fp/<id>), so it works regardless of how the mirror bot
+		// concatenates "Index URL" + "findpath?id=" + id. When the bot's Index URL is
+		// set to a path prefix (e.g. ".../fp/"), the id lands in the path and the
+		// resulting Telegram link already hides the raw Drive id.
+		const findPathMatch = url.pathname.match(/^\/(?:findpath|fp)(?:\/([A-Za-z0-9_-]+))?\/?$/);
+		if (findPathMatch) {
+			try {
+				// The literal segment "findpath" is a routing keyword, not a Drive id —
+				// e.g. a bot whose Index URL is ".../fp/" produces "/fp/findpath?id=<id>",
+				// where the real id is in the query and the path segment is the keyword.
+				const pathId = findPathMatch[1] && findPathMatch[1] !== 'findpath' ? findPathMatch[1] : null;
+				const target = await resolveFindPath(url.searchParams.get('id') || pathId, env);
+				if (!target) return new Response('Missing id', { status: 400 });
+				if (target.isFolder) {
+					const code = await ensureShortlink(env.DB, target.folderId, target.name);
+					return Response.redirect(new URL(`/folder/${code}`, request.url).toString(), 302);
+				}
+				const code = await ensureFileLink(env.DB, target.folderId, target.name);
+				return Response.redirect(new URL(`/file/${code}/${encodeURIComponent(target.name)}`, request.url).toString(), 302);
+			} catch (err) {
+				return new Response(`Failed to resolve path: ${err instanceof Error ? err.message : String(err)}`, { status: 502 });
+			}
+		}
 
 		// Direct download link: /file/<code>/<name> — hides the Google Drive file ID.
 		// Stream link: /stream/<code>/<name> — same, but streams inline for players.
@@ -260,10 +288,9 @@ export default {
 			// Endpoint to create a short download link for a file:
 			//   /api/filelink?id=<fileId>&name=<name> -> /file/<code>/<name>
 			if (url.pathname === '/api/filelink' && request.method === 'GET') {
-				const authHeader = request.headers.get('Authorization');
-				if (authHeader !== `Bearer ${todayToken()}`) {
-					return Response.json({ success: false, message: 'Unauthorized or token expired' }, { status: 401 });
-				}
+				// PUBLIC — link creation mirrors the public /api/file and /findpath access:
+				// a file ID already grants download, so masking it must not require login
+				// (mirror-bot folders are browsed without a token).
 
 				const fileId = url.searchParams.get('id');
 				const name = url.searchParams.get('name') || 'file';
@@ -276,6 +303,29 @@ export default {
 						code,
 						url: `${new URL(request.url).origin}/file/${code}/${encodeURIComponent(name)}`,
 					});
+				} catch (err: any) {
+					return Response.json({ success: false, message: err.message }, { status: 500 });
+				}
+			}
+
+			// Batch version of /api/filelink — one call resolves many file ids to their
+			// short /file/<code>/<name> URLs. PUBLIC for the same reason as /api/filelink.
+			// Body: { files: [{ id, name }] } -> { success, links: { [id]: url } }
+			if (url.pathname === '/api/filelinks' && request.method === 'POST') {
+				try {
+					const body: any = await request.json();
+					const files: { id: string; name: string }[] = Array.isArray(body?.files) ? body.files : [];
+					const origin = new URL(request.url).origin;
+					const links: Record<string, string> = {};
+					await Promise.all(
+						files.map(async (f) => {
+							if (!f || !f.id) return;
+							const name = f.name || 'file';
+							const code = await ensureFileLink(env.DB, f.id, name);
+							links[f.id] = `${origin}/file/${code}/${encodeURIComponent(name)}`;
+						})
+					);
+					return Response.json({ success: true, links });
 				} catch (err: any) {
 					return Response.json({ success: false, message: err.message }, { status: 500 });
 				}
@@ -419,6 +469,31 @@ async function isDescendant(accessToken: string, folderId: string, ancestorId: s
 	return false;
 }
 
+interface DriveFileMeta {
+	id: string;
+	name?: string;
+	mimeType?: string;
+	parents?: string[];
+}
+
+// Resolves a /findpath?id=<driveId> request to the folder that should be opened.
+// Files resolve to their parent folder; folders resolve to themselves.
+// Returns null when the id parameter is missing.
+async function resolveFindPath(id: string | null, env: Env): Promise<{ folderId: string; name: string; isFolder: boolean } | null> {
+	if (!id) return null;
+	const accessToken = await getAccessToken(env);
+	const metaRes = await fetch(
+		`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?fields=id,name,mimeType,parents`,
+		{ headers: { Authorization: `Bearer ${accessToken}` } }
+	);
+	if (!metaRes.ok) {
+		const text = await metaRes.text();
+		throw new Error(`GD Error ${metaRes.status}: ${text}`);
+	}
+	const meta = (await metaRes.json()) as DriveFileMeta;
+	const isFolder = meta.mimeType === 'application/vnd.google-apps.folder';
+	return { folderId: meta.id, name: meta.name || '', isFolder };
+}
 // ---------- Shortlink helpers ----------
 
 function generateCode(): string {
