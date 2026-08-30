@@ -9,7 +9,8 @@ ocr.ps1
 ss3.png
 .dev.vars
 
-# Environment secrets — never commit
-.env
-.env.*
-!.env.example
+# Agentmemory local files (config and runtime data)
+!.agentmemory/.env        # Keep config
+.agentmemory/preferences.json   # Keep preferences
+.agentmemory/*.sqlite       # Exclude database files
+.agentmemory/snapshots      # Exclude snapshot directory

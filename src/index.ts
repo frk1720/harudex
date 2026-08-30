@@ -77,6 +77,38 @@ export default {
 			if (!code) return new Response('Missing code', { status: 400 });
 			return Response.redirect(new URL(`/folder/${code}`, request.url).toString(), 308);
 		}
+		// Mirror-bot deep link: /findpath?id=<driveId> — used by Telegram mirror bots
+		// (e.g. "Index Link"). Resolves the Drive file/folder and redirects to the
+		// appropriate hidden-ID shortlink. Files -> /file/<code>/<name> (direct, masked);
+		// folders -> /folder/<code> (SPA opens the shared folder publicly).
+		// Accept the Drive id from EITHER the query (?id=) or the path
+		// (/findpath/<id>, /fp/<id>), so it works regardless of how the mirror bot
+		// concatenates "Index URL" + "findpath?id=" + id. When the bot's Index URL is
+		// set to a path prefix (e.g. ".../fp/"), the id lands in the path and the
+		// resulting Telegram link already hides the raw Drive id.
+		const findPathMatch = url.pathname.match(/^\/(?:findpath|fp)(?:\/([A-Za-z0-9_-]+))?\/?$/);
+		if (findPathMatch) {
+			try {
+				// A Drive ID is URL-safe. Reject arbitrary input before it reaches the
+				// metadata endpoint, while still accepting IDs supplied by either route form.
+				const pathId = findPathMatch[1] && findPathMatch[1] !== 'findpath' ? findPathMatch[1] : null;
+				const driveId = url.searchParams.get('id') || pathId;
+				if (!driveId) return new Response('Missing id', { status: 400 });
+				if (!isDriveId(driveId)) return new Response('Invalid id', { status: 400 });
+
+				const target = await resolveFindPath(driveId, env);
+				if (!target) return new Response('Missing id', { status: 400 });
+				if (target.isFolder) {
+					const code = await ensureShortlink(env.DB, target.driveId, target.name);
+					return Response.redirect(new URL(`/folder/${code}`, request.url).toString(), 302);
+				}
+				const code = await ensureFileLink(env.DB, target.driveId, target.name);
+				return Response.redirect(new URL(`/file/${code}/${encodeURIComponent(target.name)}`, request.url).toString(), 302);
+			} catch {
+				// Do not echo Google API errors or request data into a public response.
+				return new Response('Unable to resolve file path', { status: 502 });
+			}
+		}
 
 		// Direct download link: /file/<code>/<name> — hides the Google Drive file ID.
 		// Stream link: /stream/<code>/<name> — same, but streams inline for players.
@@ -126,7 +158,9 @@ export default {
 				let authorized = false;
 				if (publicCode) {
 					try {
-						const shared = await env.DB.prepare('SELECT folder_id FROM shortlinks WHERE code = ?').bind(publicCode).first<{ folder_id: string }>();
+						const shared = await env.DB.prepare('SELECT folder_id FROM shortlinks WHERE code = ?')
+							.bind(publicCode)
+							.first<{ folder_id: string }>();
 						if (shared) {
 							const accessToken = await getAccessToken(env);
 							authorized = folderId === shared.folder_id || (await isDescendant(accessToken, folderId, shared.folder_id));
@@ -148,7 +182,10 @@ export default {
 					const files = await listFolder(accessToken, folderId);
 
 					// Ensure every folder (incl. subfolders shown here) has its own short URL
-					const codeByFolder = await ensureShortlinks(env.DB, files.filter((f) => f.isFolder));
+					const codeByFolder = await ensureShortlinks(
+						env.DB,
+						files.filter((f) => f.isFolder),
+					);
 					const origin = new URL(request.url).origin;
 					const filesWithLinks = files.map((f) => {
 						if (f.isFolder && codeByFolder[f.id]) {
@@ -185,7 +222,7 @@ export default {
 					const safeQuery = query.replace(/'/g, "\\'");
 					const gdQuery = `name contains '${safeQuery}' and trashed = false`;
 					const fields = 'nextPageToken,files(id, name, mimeType, size, modifiedTime)';
-					
+
 					const params = new URLSearchParams({
 						q: gdQuery,
 						fields,
@@ -216,7 +253,10 @@ export default {
 						isFolder: f.mimeType === 'application/vnd.google-apps.folder',
 					}));
 
-					const codeByFolder = await ensureShortlinks(env.DB, files.filter((f: any) => f.isFolder));
+					const codeByFolder = await ensureShortlinks(
+						env.DB,
+						files.filter((f: any) => f.isFolder),
+					);
 					const origin = new URL(request.url).origin;
 					const filesWithLinks = files.map((f: any) => {
 						if (f.isFolder && codeByFolder[f.id]) {
@@ -260,10 +300,9 @@ export default {
 			// Endpoint to create a short download link for a file:
 			//   /api/filelink?id=<fileId>&name=<name> -> /file/<code>/<name>
 			if (url.pathname === '/api/filelink' && request.method === 'GET') {
-				const authHeader = request.headers.get('Authorization');
-				if (authHeader !== `Bearer ${todayToken()}`) {
-					return Response.json({ success: false, message: 'Unauthorized or token expired' }, { status: 401 });
-				}
+				// PUBLIC — link creation mirrors the public /api/file and /findpath access:
+				// a file ID already grants download, so masking it must not require login
+				// (mirror-bot folders are browsed without a token).
 
 				const fileId = url.searchParams.get('id');
 				const name = url.searchParams.get('name') || 'file';
@@ -281,13 +320,38 @@ export default {
 				}
 			}
 
+			// Batch version of /api/filelink — one call resolves many file ids to their
+			// short /file/<code>/<name> URLs. PUBLIC for the same reason as /api/filelink.
+			// Body: { files: [{ id, name }] } -> { success, links: { [id]: url } }
+			if (url.pathname === '/api/filelinks' && request.method === 'POST') {
+				try {
+					const body: any = await request.json();
+					const files: { id: string; name: string }[] = Array.isArray(body?.files) ? body.files : [];
+					const origin = new URL(request.url).origin;
+					const links: Record<string, string> = {};
+					await Promise.all(
+						files.map(async (f) => {
+							if (!f || !f.id) return;
+							const name = f.name || 'file';
+							const code = await ensureFileLink(env.DB, f.id, name);
+							links[f.id] = `${origin}/file/${code}/${encodeURIComponent(name)}`;
+						}),
+					);
+					return Response.json({ success: true, links });
+				} catch (err: any) {
+					return Response.json({ success: false, message: err.message }, { status: 500 });
+				}
+			}
+
 			// Resolve a short code to its folder (public — used by the SPA on /folder/<code>)
 			if (url.pathname === '/api/resolve' && request.method === 'GET') {
 				const code = url.searchParams.get('code');
 				if (!code) return Response.json({ success: false, message: 'Missing code' }, { status: 400 });
 
 				try {
-					const row = await env.DB.prepare('SELECT folder_id, name FROM shortlinks WHERE code = ?').bind(code).first<{ folder_id: string; name: string }>();
+					const row = await env.DB.prepare('SELECT folder_id, name FROM shortlinks WHERE code = ?')
+						.bind(code)
+						.first<{ folder_id: string; name: string }>();
 					if (!row) return Response.json({ success: false, message: 'Shortlink not found' }, { status: 404 });
 					return Response.json({ success: true, folderId: row.folder_id, name: row.name });
 				} catch (err: any) {
@@ -304,7 +368,7 @@ export default {
 
 				try {
 					const { results } = await env.DB.prepare(
-						'SELECT code, folder_id, name, created_at FROM shortlinks ORDER BY created_at DESC'
+						'SELECT code, folder_id, name, created_at FROM shortlinks ORDER BY created_at DESC',
 					).all();
 					return Response.json({ success: true, shortlinks: results });
 				} catch (err: any) {
@@ -419,6 +483,34 @@ async function isDescendant(accessToken: string, folderId: string, ancestorId: s
 	return false;
 }
 
+interface DriveFileMeta {
+	id: string;
+	name?: string;
+	mimeType?: string;
+	parents?: string[];
+}
+// Drive IDs use the URL-safe alphabet accepted by the Drive API. Keeping this
+function isDriveId(value: string): boolean {
+	return /^[A-Za-z0-9_-]{1,256}$/.test(value);
+}
+
+// Resolves a /findpath?id=<driveId> request to the Drive item that should be linked.
+// Folders resolve to themselves; files resolve to the file link target.
+// Returns null when the id parameter is missing.
+async function resolveFindPath(id: string | null, env: Env): Promise<{ driveId: string; name: string; isFolder: boolean } | null> {
+	if (!id) return null;
+	const accessToken = await getAccessToken(env);
+	const metaRes = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?fields=id,name,mimeType,parents`, {
+		headers: { Authorization: `Bearer ${accessToken}` },
+	});
+	if (!metaRes.ok) {
+		throw new Error(`GD Error ${metaRes.status}`);
+	}
+	const meta = (await metaRes.json()) as DriveFileMeta;
+	if (!meta.id || !isDriveId(meta.id)) throw new Error('Invalid Drive metadata');
+	const isFolder = meta.mimeType === 'application/vnd.google-apps.folder';
+	return { driveId: meta.id, name: meta.name || '', isFolder };
+}
 // ---------- Shortlink helpers ----------
 
 function generateCode(): string {
@@ -469,7 +561,7 @@ async function ensureShortlinks(db: D1Database, folders: { id: string; name: str
 	const missing = folders.filter((f) => !result[f.id]);
 	const pending = missing.map((f) => ({ folder: f, code: generateCode() }));
 	const statements = pending.map((p) =>
-		db.prepare('INSERT OR IGNORE INTO shortlinks (code, folder_id, name) VALUES (?, ?, ?)').bind(p.code, p.folder.id, p.folder.name || '')
+		db.prepare('INSERT OR IGNORE INTO shortlinks (code, folder_id, name) VALUES (?, ?, ?)').bind(p.code, p.folder.id, p.folder.name || ''),
 	);
 	if (statements.length) {
 		const batch = await db.batch(statements);
@@ -562,14 +654,17 @@ async function streamFile(request: Request, fileId: string, accessToken: string,
 		method: 'GET',
 		headers: {
 			Authorization: `Bearer ${accessToken}`,
-			Range: asDownload ? '' : (request.headers.get('Range') || ''),
+			// Honors Range for BOTH streaming and downloads so download managers
+			// (e.g. IDM) can probe size, multi-part download and resume. When no Range
+			// is present Google Drive streams the whole file with chunked encoding.
+			Range: request.headers.get('Range') || '',
 		},
 	});
 
-	// Range is only useful for streaming; downloads get the whole file
+	// If the client sent no Range, drop the empty header so Google Drive streams fully.
 	if (!proxyRequest.headers.get('Range')) proxyRequest.headers.delete('Range');
 
-	let fileResponse = await fetch(proxyRequest);
+	const fileResponse = await fetch(proxyRequest);
 
 	// Reconstruct response to pass headers (Content-Type, Content-Disposition, etc)
 	const headers = new Headers(fileResponse.headers);
@@ -577,6 +672,12 @@ async function streamFile(request: Request, fileId: string, accessToken: string,
 	if (meta.mimeType) headers.set('Content-Type', meta.mimeType);
 	// Allow byte-range requests so media players can seek
 	headers.set('Accept-Ranges', 'bytes');
+	// When responding with the full file (status 200) Google Drive often omits
+	// Content-Length because it uses chunked encoding. Inject the known size so
+	// download managers immediately see the total file size.
+	if (fileResponse.status === 200 && !headers.has('Content-Length') && meta.size) {
+		headers.set('Content-Length', String(meta.size));
+	}
 	// Enable CORS
 	applyCors(headers);
 

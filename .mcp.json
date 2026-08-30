@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "agentmemory": {
+      "command": "npx",
+      "args": [
+        "--yes",
+        "@agentmemory/agentmemory",
+        "mcp"
+      ],
+      "env": {
+        "AGENTMEMORY_INJECT_CONTEXT": "true",
+        "GRAPH_EXTRACTION_ENABLED": "true",
+        "EMBEDDING_PROVIDER": "local",
+        "AGENTMEMORY_URL": "http://localhost:3111"
+      }
+    }
+  }
+}

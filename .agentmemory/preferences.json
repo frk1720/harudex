@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "lastAgent": "claude-code",
+  "lastAgents": [
+    "claude-code"
+  ],
+  "lastProvider": null,
+  "skipSplash": true,
+  "skipNpxHint": false,
+  "skipGlobalInstall": false,
+  "skipConsoleInstall": false,
+  "firstRunAt": "2026-08-24T09:01:34.916Z",
+  "injectContextChosen": true
+}

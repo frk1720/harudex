@@ -253,6 +253,18 @@
       color: var(--text-muted);
       border-bottom: 1px solid var(--border-color);
     }
+    .file-header .sortable {
+      cursor: pointer;
+      user-select: none;
+      white-space: nowrap;
+    }
+    .file-header .sortable:hover {
+      color: var(--text-main, #fff);
+    }
+    .file-header .sortable .sort-arrow {
+      font-size: 0.7rem;
+      margin-left: 4px;
+    }
     .file-item {
       display: grid;
       grid-template-columns: 40px 40px minmax(200px, 1fr) 150px 100px 120px;
@@ -418,9 +430,9 @@
           <div class="file-header">
             <div><input type="checkbox" class="file-checkbox" id="check-all" /></div>
             <div></div> <!-- Icon Col -->
-            <div>NAME</div>
-            <div>MODIFIED</div>
-            <div>SIZE</div>
+            <div class="sortable" data-sort="name">NAME</div>
+            <div class="sortable" data-sort="modified">MODIFIED</div>
+            <div class="sortable" data-sort="size">SIZE</div>
             <div>ACTIONS</div>
           </div>
           <div id="file-container">
@@ -463,6 +475,9 @@
     let currentFolderId = 'root';
     let folderHistory = [{ id: 'root', name: 'Root' }];
     let currentFiles = [];
+    // Sort state for the file list. key: 'name' | 'modified' | 'size', dir: 1 (asc) | -1 (desc).
+    // Folders always stay grouped above files regardless of direction.
+    let sortState = { key: 'name', dir: 1 };
     let currentShortUrl = null;
     // Public shortlink code — set when visiting /folder/<code>. Lets users
     // browse the shared folder (and everything inside it) without logging in.
@@ -733,29 +748,25 @@
 
     let currentStream = null; // { name, streamUrl }
     // Build a hidden-ID download link for a file (e.g. /file/<code>/<name>).
-    // Falls back to the plain link if the API call fails.
+    // Never falls back to the raw /api/file?id= link, so the Drive ID is never exposed.
     async function fileDownloadUrl(f) {
-      try {
-        const headers = {};
-        if (currentToken) headers['Authorization'] = `Bearer ${currentToken}`;
-        const res = await fetch(`/api/filelink?id=${encodeURIComponent(f.id)}&name=${encodeURIComponent(f.name)}`, { headers });
-        const data = await res.json();
-        if (data.success && data.url) return data.url;
-      } catch (err) {}
-      return `${window.location.origin}/api/file?id=${encodeURIComponent(f.id)}&download=1`;
+      const headers = {};
+      if (currentToken) headers['Authorization'] = `Bearer ${currentToken}`;
+      const res = await fetch(`/api/filelink?id=${encodeURIComponent(f.id)}&name=${encodeURIComponent(f.name)}`, { headers });
+      const data = await res.json();
+      if (data.success && data.url) return data.url;
+      throw new Error(data.message || 'Failed to create file link');
     }
 
     // Build a hidden-ID stream URL (e.g. /stream/<code>/<name>).
-    // Falls back to the plain link if the API call fails.
+    // Never falls back to the raw Drive-ID link.
     async function streamFileUrl(f) {
-      try {
-        const headers = {};
-        if (currentToken) headers['Authorization'] = `Bearer ${currentToken}`;
-        const res = await fetch(`/api/filelink?id=${encodeURIComponent(f.id)}&name=${encodeURIComponent(f.name)}`, { headers });
-        const data = await res.json();
-        if (data.success && data.code) return `${window.location.origin}/stream/${data.code}/${encodeURIComponent(f.name)}`;
-      } catch (err) {}
-      return `${window.location.origin}/api/file/${encodeURIComponent(f.name)}?id=${encodeURIComponent(f.id)}`;
+      const headers = {};
+      if (currentToken) headers['Authorization'] = `Bearer ${currentToken}`;
+      const res = await fetch(`/api/filelink?id=${encodeURIComponent(f.id)}&name=${encodeURIComponent(f.name)}`, { headers });
+      const data = await res.json();
+      if (data.success && data.code) return `${window.location.origin}/stream/${data.code}/${encodeURIComponent(f.name)}`;
+      throw new Error(data.message || 'Failed to create stream link');
     }
 
     async function openStreamModal(f) {
@@ -795,11 +806,13 @@
       if (e.target === document.getElementById('stream-modal')) closeStreamModal();
     });
 
-    function renderFiles(files) {
+    async function renderFiles(files) {
       fileContainer.innerHTML = '';
+      updateSortIndicators();
+      const sorted = sortFiles(files);
       
       let totalSize = 0;
-      files.forEach(f => {
+      sorted.forEach(f => {
         if (!f.isFolder && f.size) {
           totalSize += parseInt(f.size, 10) || 0;
         }
@@ -807,15 +820,30 @@
       
       fileFooter.textContent = `${files.length} item(s) | Size ${formatBytes(totalSize)}`;
 
-      if (files.length === 0) {
+      if (sorted.length === 0) {
         fileContainer.innerHTML = '<div style="padding: 20px; text-align: center; color: var(--text-muted);">Folder is empty</div>';
         return;
       }
 
-      files.forEach((f, idx) => {
+      // Pre-create hidden-ID download links for every file so the name anchor's
+      // href (used by right-click → Copy Link) carries the real /file/<code>/<name>
+      // URL instead of '#'. Folders and stream-modal files keep their '#' href.
+      const fileLinks = {};
+      const plainFiles = sorted.filter((f) => !f.isFolder);
+      if (plainFiles.length) {
+        try {
+          const headers = { 'Content-Type': 'application/json' };
+          if (currentToken) headers['Authorization'] = `Bearer ${currentToken}`;
+          const res = await fetch('/api/filelinks', { method: 'POST', headers, body: JSON.stringify({ files: plainFiles.map((f) => ({ id: f.id, name: f.name })) }) });
+          const data = await res.json();
+          if (data.success && data.links) Object.assign(fileLinks, data.links);
+        } catch (err) {}
+      }
+
+      sorted.forEach((f, idx) => {
         const row = document.createElement('div');
         row.className = 'file-item';
-        
+
         // Checkbox
         const chkCol = document.createElement('div');
         const chk = document.createElement('input');
@@ -843,10 +871,12 @@
         nameA.className = 'file-name';
         nameA.textContent = f.name;
         nameA.href = '#';
+        // Real shortlink href so right-click → Copy Link yields the masked URL.
+        if (!f.isFolder && fileLinks[f.id]) {
+          nameA.href = fileLinks[f.id];
+          nameA.target = '_blank';
+        }
         
-        const fileUrl = `${window.location.origin}/api/file?id=${f.id}`;
-        const downloadUrl = `${fileUrl}&download=1`;
-
         if (f.isFolder) {
           nameA.onclick = (e) => {
             e.preventDefault();
@@ -861,8 +891,12 @@
           };
         } else {
           // Non-media files open inline as before
-          nameA.href = fileUrl;
-          nameA.target = '_blank';
+          nameA.onclick = (e) => {
+            e.preventDefault();
+            const u = fileLinks[f.id];
+            if (u) window.open(u, '_blank');
+            else fileDownloadUrl(f).then((url) => window.open(url, '_blank')).catch(() => alert('Failed to create download link'));
+          };
         }
         nameCol.appendChild(nameA);
 
@@ -950,6 +984,48 @@
         fileContainer.appendChild(row);
       });
     }
+
+    // ---------- Sorting ----------
+
+    function sortFiles(files) {
+      const mul = sortState.dir;
+      return [...files].sort((a, b) => {
+        if (a.isFolder !== b.isFolder) return a.isFolder ? -1 : 1;
+        let cmp = 0;
+        if (sortState.key === 'name') {
+          cmp = (a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' });
+        } else if (sortState.key === 'modified') {
+          cmp = new Date(a.modifiedTime || 0) - new Date(b.modifiedTime || 0);
+        } else if (sortState.key === 'size') {
+          cmp = (parseInt(a.size, 10) || 0) - (parseInt(b.size, 10) || 0);
+        }
+        if (cmp === 0) {
+          cmp = (a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' });
+        }
+        return cmp * mul;
+      });
+    }
+
+    function updateSortIndicators() {
+      document.querySelectorAll('.file-header .sortable').forEach(el => {
+        const key = el.dataset.sort;
+        const label = key === 'name' ? 'NAME' : key === 'modified' ? 'MODIFIED' : 'SIZE';
+        const arrow = sortState.key === key ? (sortState.dir === 1 ? '▲' : '▼') : '';
+        el.innerHTML = label + (arrow ? ` <span class="sort-arrow">${arrow}</span>` : '');
+      });
+    }
+
+    document.querySelectorAll('.file-header .sortable').forEach(el => {
+      el.addEventListener('click', () => {
+        const key = el.dataset.sort;
+        if (sortState.key === key) {
+          sortState.dir *= -1;
+        } else {
+          sortState = { key, dir: 1 };
+        }
+        if (currentFiles.length) renderFiles(currentFiles);
+      });
+    });
 
     // Checkbox Logic
     checkAll.addEventListener('change', (e) => {
